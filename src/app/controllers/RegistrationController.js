@@ -1,9 +1,11 @@
 import * as Yup from 'yup';
 import { Op } from 'sequelize';
-import { addMonths, parseISO } from 'date-fns';
+import { addMonths, parseISO, startOfDay, endOfDay } from 'date-fns';
 import Registration from '../models/Registration';
 import Plan from '../models/Plan';
 import Student from '../models/Student';
+import RegistrationMail from '../jobs/RegistrationMail';
+import Queue from '../../lib/Queue';
 
 class RegistrationController {
   async index(req, res) {
@@ -50,7 +52,9 @@ class RegistrationController {
       return res.status(400).json({ error: 'Student not found' });
     }
 
-    const end_date = addMonths(parseISO(start_date), plan.duration);
+    const parsedStartDate = startOfDay(parseISO(start_date));
+
+    const end_date = endOfDay(addMonths(parsedStartDate, plan.duration));
     const price = plan.totalPrice;
 
     const studentRegistration = await Registration.findAll({
@@ -73,12 +77,33 @@ class RegistrationController {
       });
     }
 
-    const registration = await Registration.create({
+    const registrationToSave = {
       student_id,
       plan_id,
-      start_date,
+      start_date: parsedStartDate,
       end_date,
       price,
+    };
+
+    let registration = await Registration.create(registrationToSave);
+
+    registration = await Registration.findByPk(registration.id, {
+      include: [
+        {
+          model: Student,
+          as: 'student',
+          attributes: ['id', 'name', 'email'],
+        },
+        {
+          model: Plan,
+          as: 'plan',
+          attributes: ['id', 'title'],
+        },
+      ],
+    });
+
+    await Queue.add(RegistrationMail.key, {
+      registration,
     });
 
     return res.json(registration);
@@ -117,7 +142,9 @@ class RegistrationController {
       return res.status(400).json({ error: 'Plan not found' });
     }
 
-    const end_date = addMonths(parseISO(start_date), plan.duration);
+    const parsedStartDate = startOfDay(parseISO(start_date));
+
+    const end_date = endOfDay(addMonths(parsedStartDate, plan.duration));
     const price = plan.totalPrice;
 
     const studentRegistration = await Registration.findAll({
@@ -146,7 +173,7 @@ class RegistrationController {
     const savedRegistration = await registration.update({
       student_id,
       plan_id,
-      start_date,
+      start_date: parsedStartDate,
       end_date,
       price,
     });
